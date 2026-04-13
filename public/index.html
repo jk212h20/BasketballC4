@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Basketball Connect 4</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="lobby">
+    <div class="lobby-content">
+      <h1 class="game-title">BASKETBALL CONNECT 4</h1>
+      <p class="subtitle">Aim. Shoot. Bounce. Win.</p>
+      <button id="join-btn" class="arcade-btn">JOIN GAME</button>
+      <p id="lobby-status" class="status-text"></p>
+    </div>
+  </div>
+
+  <div id="game-screen" style="display:none;">
+    <div id="game-header">
+      <div id="player1-info" class="player-info">
+        <span class="player-indicator p1"></span>
+        <span>Player 1</span>
+      </div>
+      <div id="turn-display">YOUR TURN</div>
+      <div id="player2-info" class="player-info">
+        <span>Player 2</span>
+        <span class="player-indicator p2"></span>
+      </div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="game-message" style="display:none;">
+      <h2 id="message-text"></h2>
+      <button id="play-again-btn" class="arcade-btn" style="display:none;">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/game.js"></script>
+</body>
+</html>

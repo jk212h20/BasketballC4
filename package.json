@@ -1,0 +1,14 @@
+{
+  "name": "basketball-c4",
+  "version": "1.0.0",
+  "description": "2-player online basketball connect 4 with arcade physics",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}

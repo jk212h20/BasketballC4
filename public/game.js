@@ -170,7 +170,13 @@ socket.on('game-state', (data) => {
   } else {
     canShoot = gameStatus === 'playing' && Date.now() >= cooldownEnd;
   }
-  ballAnims = [];
+  // Only clear animations if no active ones — game-state during animation would kill in-flight balls
+  if (ballAnims.length === 0) {
+    // safe to clear
+  } else {
+    // Let animations finish — they carry the correct pending board state
+    console.log(`game-state received while ${ballAnims.length} animations in flight, keeping them`);
+  }
   updateTurnDisplay();
 });
 
@@ -208,6 +214,7 @@ socket.on('shot-result', (data) => {
   if (gameMode === 'turnBased') canShoot = false;
 
   let anim;
+  const createdAt = Date.now();
   if (graphicsMode === 2) {
     const actualCenterX = BOARD_X + actualColumn * CELL_SIZE + CELL_SIZE / 2;
     const rimSide = (startX < actualCenterX) ? -1 : 1;
@@ -218,7 +225,7 @@ socket.on('shot-result', (data) => {
     const approachX = rimX + rimSide * 5;
 
     anim = {
-      phase: 'arc', graphicsMode: 2, animType, progress: 0,
+      phase: 'arc', graphicsMode: 2, animType, progress: 0, createdAt,
       startX, startY, peakX: (startX + approachX) / 2, peakY: PEAK_Y,
       rimX, rimY, approachX, endX: actualCenterX,
       bounceEndY: BOARD_Y - BALL_RADIUS * 1.5,
@@ -230,7 +237,7 @@ socket.on('shot-result', (data) => {
     };
   } else {
     anim = {
-      phase: 'arc', graphicsMode: 1, animType, progress: 0,
+      phase: 'arc', graphicsMode: 1, animType, progress: 0, createdAt,
       startX, startY, peakX, peakY, endX,
       dropStartY: BOARD_Y - BALL_RADIUS,
       dropEndY: BOARD_Y + row * CELL_SIZE + CELL_SIZE / 2,
@@ -401,8 +408,15 @@ function getArcPosition(anim, t) {
 
 // Update all ball animations
 function updateBallAnimations() {
+  const now = Date.now();
   for (let i = ballAnims.length - 1; i >= 0; i--) {
     const anim = ballAnims[i];
+    // Safety: force-finalize animations stuck for more than 10 seconds
+    if (anim.createdAt && (now - anim.createdAt > 10000)) {
+      console.warn('Animation timed out, force-finalizing');
+      finalizeAnimation(anim);
+      continue;
+    }
     if (anim.graphicsMode === 2) {
       if (anim.phase === 'arc') {
         anim.progress += 0.016;

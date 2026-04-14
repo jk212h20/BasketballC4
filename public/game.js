@@ -44,6 +44,9 @@ const P2_COLOR = '#44aaff';
 const P2_GLOW = 'rgba(68, 170, 255, 0.6)';
 const BALL_COLOR = '#ff8c00';
 
+// Graphics mode: 1 = original arc, 2 = rim bounce
+let graphicsMode = 2; // Default to rim bounce
+
 // Game state
 let playerNumber = 0;
 let board = [];
@@ -270,27 +273,82 @@ socket.on('shot-result', (data) => {
 
   // Start the animation
   canShoot = false;
-  ballAnim = {
-    phase: 'arc', // 'arc' -> 'drop'
-    animType,
-    progress: 0,
-    startX, startY,
-    peakX, peakY,
-    endX,
-    dropStartY: BOARD_Y - BALL_RADIUS,
-    dropEndY: BOARD_Y + row * CELL_SIZE + CELL_SIZE / 2,
-    targetColumn,
-    actualColumn,
-    row,
-    player,
-    rotation: 0,
-    // Callback data
-    pendingBoard,
-    pendingCurrentPlayer,
-    pendingStatus,
-    pendingWinner,
-    pendingWinCells
-  };
+
+  if (graphicsMode === 2) {
+    // --- Graphics Option 2: Rim Bounce ---
+    // Ball arcs to just above the board, slightly off-center.
+    // It hits the rim (area between holes), bounces, then settles into the correct column.
+    
+    // The "rim" is the edge between the actualColumn and an adjacent column
+    // Pick a rim position: the edge of the actual column closest to where the ball came from
+    const actualCenterX = BOARD_X + actualColumn * CELL_SIZE + CELL_SIZE / 2;
+    const rimSide = (startX < actualCenterX) ? -1 : 1; // which side the ball approaches from
+    // Rim X is the edge between actualColumn and actualColumn+rimSide (or board edge)
+    let rimX;
+    if (rimSide === -1) {
+      rimX = BOARD_X + actualColumn * CELL_SIZE + PIECE_RADIUS * 0.3; // just inside left rim
+    } else {
+      rimX = BOARD_X + (actualColumn + 1) * CELL_SIZE - PIECE_RADIUS * 0.3; // just inside right rim
+    }
+    const rimY = BOARD_Y + CELL_SIZE / 2 - PIECE_RADIUS - BALL_RADIUS; // just above the first row hole
+
+    // Arc aims slightly off — toward the rim, not dead center
+    const approachX = rimX + rimSide * 5; // slightly beyond the rim
+    
+    ballAnim = {
+      phase: 'arc', // 'arc' -> 'bounce' -> 'drop'
+      graphicsMode: 2,
+      animType,
+      progress: 0,
+      startX, startY,
+      // Arc aims at a point above the rim
+      peakX: (startX + approachX) / 2,
+      peakY: PEAK_Y,
+      // Pre-bounce target: the rim
+      rimX, rimY,
+      approachX,
+      // Post-bounce target: center of actual column, just above board
+      endX: actualCenterX,
+      bounceEndY: BOARD_Y - BALL_RADIUS * 1.5,
+      dropStartY: BOARD_Y - BALL_RADIUS,
+      dropEndY: BOARD_Y + row * CELL_SIZE + CELL_SIZE / 2,
+      rimSide,
+      targetColumn,
+      actualColumn,
+      row,
+      player,
+      rotation: 0,
+      bounceSpeed: 0.85, // slightly reduced speed after bounce
+      pendingBoard,
+      pendingCurrentPlayer,
+      pendingStatus,
+      pendingWinner,
+      pendingWinCells
+    };
+  } else {
+    // --- Graphics Option 1: Original arc ---
+    ballAnim = {
+      phase: 'arc', // 'arc' -> 'drop'
+      graphicsMode: 1,
+      animType,
+      progress: 0,
+      startX, startY,
+      peakX, peakY,
+      endX,
+      dropStartY: BOARD_Y - BALL_RADIUS,
+      dropEndY: BOARD_Y + row * CELL_SIZE + CELL_SIZE / 2,
+      targetColumn,
+      actualColumn,
+      row,
+      player,
+      rotation: 0,
+      pendingBoard,
+      pendingCurrentPlayer,
+      pendingStatus,
+      pendingWinner,
+      pendingWinCells
+    };
+  }
   ballTrail = [];
 });
 
@@ -398,91 +456,131 @@ canvas.addEventListener('touchend', (e) => {
   hoveredCol = -1;
 });
 
-// Ball animation update
+// Finalize animation — apply pending game state
+function finalizeAnimation(anim) {
+  board = anim.pendingBoard;
+  currentPlayer = anim.pendingCurrentPlayer;
+  gameStatus = anim.pendingStatus;
+  isMyTurn = (currentPlayer === playerNumber);
+
+  spawnParticles(anim.endX, anim.dropEndY, anim.player === 1 ? P1_COLOR : P2_COLOR, 20, 4);
+
+  if (anim.pendingStatus === 'won') {
+    winCells = anim.pendingWinCells;
+    winPulse = 0;
+    const isWinner = anim.pendingWinner === playerNumber;
+    setTimeout(() => {
+      messageText.textContent = isWinner ? 'YOU WIN!' : 'YOU LOSE!';
+      gameMessage.style.display = 'block';
+      playAgainBtn.style.display = 'inline-block';
+      spawnParticles(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, isWinner ? '#ffcc00' : '#ff4444', 50, 6);
+    }, 400);
+  } else if (anim.pendingStatus === 'draw') {
+    setTimeout(() => {
+      messageText.textContent = 'DRAW!';
+      gameMessage.style.display = 'block';
+      playAgainBtn.style.display = 'inline-block';
+    }, 400);
+  } else {
+    canShoot = isMyTurn;
+  }
+  updateTurnDisplay();
+  ballAnim = null;
+  ballTrail = [];
+}
+
+// Ball animation update — supports both graphics modes
 function updateBallAnimation() {
   if (!ballAnim) return;
-
   const anim = ballAnim;
 
-  if (anim.phase === 'arc') {
-    // Speed varies by animation type
-    let speed;
-    if (anim.animType === 'direct') speed = 0.018;
-    else if (anim.animType === 'adjacent') speed = 0.015;
-    else speed = 0.012; // wild — slower, more dramatic
-
-    anim.progress += speed;
-
-    if (anim.progress >= 1) {
-      anim.progress = 1;
-      // Transition to drop phase
-      anim.phase = 'drop';
-      anim.progress = 0;
-      spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 8, 2);
-    }
-
-    // Calculate current ball position along the arc
-    const t = anim.progress;
-    const ballPos = getArcPosition(anim, t);
-    anim.currentX = ballPos.x;
-    anim.currentY = ballPos.y;
-    anim.rotation += 0.08;
-
-    // Trail
-    ballTrail.push({ x: ballPos.x, y: ballPos.y, life: 1.0 });
-    if (ballTrail.length > 25) ballTrail.shift();
-    for (const tr of ballTrail) tr.life -= 0.04;
-
-  } else if (anim.phase === 'drop') {
-    anim.progress += 0.04;
-
-    if (anim.progress >= 1) {
-      anim.progress = 1;
-      // Animation complete — apply the pending state
-      board = anim.pendingBoard;
-      currentPlayer = anim.pendingCurrentPlayer;
-      gameStatus = anim.pendingStatus;
-      isMyTurn = (currentPlayer === playerNumber);
-
-      // Particle burst on landing
-      spawnParticles(
-        anim.endX, anim.dropEndY,
-        anim.player === 1 ? P1_COLOR : P2_COLOR,
-        20, 4
-      );
-
-      if (anim.pendingStatus === 'won') {
-        winCells = anim.pendingWinCells;
-        winPulse = 0;
-        const isWinner = anim.pendingWinner === playerNumber;
-        setTimeout(() => {
-          messageText.textContent = isWinner ? 'YOU WIN!' : 'YOU LOSE!';
-          gameMessage.style.display = 'block';
-          playAgainBtn.style.display = 'inline-block';
-          spawnParticles(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, isWinner ? '#ffcc00' : '#ff4444', 50, 6);
-        }, 400);
-      } else if (anim.pendingStatus === 'draw') {
-        setTimeout(() => {
-          messageText.textContent = 'DRAW!';
-          gameMessage.style.display = 'block';
-          playAgainBtn.style.display = 'inline-block';
-        }, 400);
-      } else {
-        canShoot = isMyTurn;
+  if (anim.graphicsMode === 2) {
+    // --- Graphics Mode 2: Rim Bounce ---
+    if (anim.phase === 'arc') {
+      // Arc from shoot position up to the rim area
+      let speed = 0.016;
+      anim.progress += speed;
+      if (anim.progress >= 1) {
+        anim.progress = 1;
+        anim.phase = 'bounce';
+        anim.progress = 0;
+        // Rim hit particles
+        spawnParticles(anim.rimX, anim.rimY, '#ffcc00', 12, 3);
       }
+      const t = anim.progress;
+      // Parabolic arc from start to rim, peaking at PEAK_Y
+      anim.currentX = lerp(anim.startX, anim.rimX, t);
+      anim.currentY = parabolicY(anim.startY, anim.peakY, anim.rimY, t);
+      anim.rotation += 0.1;
 
-      updateTurnDisplay();
-      ballAnim = null;
-      ballTrail = [];
-      return;
+      ballTrail.push({ x: anim.currentX, y: anim.currentY, life: 1.0 });
+      if (ballTrail.length > 25) ballTrail.shift();
+      for (const tr of ballTrail) tr.life -= 0.04;
+
+    } else if (anim.phase === 'bounce') {
+      // Short bounce arc from rim to above the actual column
+      const speed = 0.03 * anim.bounceSpeed;
+      anim.progress += speed;
+      if (anim.progress >= 1) {
+        anim.progress = 1;
+        anim.phase = 'drop';
+        anim.progress = 0;
+        spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 6, 1.5);
+      }
+      const t = anim.progress;
+      // Small arc from rim to above the actual column
+      // Bounce pops up slightly then settles above the hole
+      const bounceHeight = anim.rimY - 30; // pop up 30px above rim
+      anim.currentX = lerp(anim.rimX, anim.endX, easeInOut(t));
+      anim.currentY = parabolicY(anim.rimY, bounceHeight, anim.dropStartY, t);
+      anim.rotation -= 0.12; // reverse spin on bounce
+
+      ballTrail.push({ x: anim.currentX, y: anim.currentY, life: 1.0 });
+      if (ballTrail.length > 25) ballTrail.shift();
+      for (const tr of ballTrail) tr.life -= 0.06;
+
+    } else if (anim.phase === 'drop') {
+      anim.progress += 0.04;
+      if (anim.progress >= 1) { anim.progress = 1; finalizeAnimation(anim); return; }
+      const t = anim.progress;
+      anim.currentX = anim.endX;
+      anim.currentY = anim.dropStartY + (anim.dropEndY - anim.dropStartY) * (t * t);
+      anim.rotation += 0.06;
     }
 
-    // Ease-in (accelerating drop like gravity)
-    const t = anim.progress;
-    const ease = t * t;
-    anim.currentX = anim.endX;
-    anim.currentY = anim.dropStartY + (anim.dropEndY - anim.dropStartY) * ease;
-    anim.rotation += 0.06;
+  } else {
+    // --- Graphics Mode 1: Original Arc ---
+    if (anim.phase === 'arc') {
+      let speed;
+      if (anim.animType === 'direct') speed = 0.018;
+      else if (anim.animType === 'adjacent') speed = 0.015;
+      else speed = 0.012;
+
+      anim.progress += speed;
+      if (anim.progress >= 1) {
+        anim.progress = 1;
+        anim.phase = 'drop';
+        anim.progress = 0;
+        spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 8, 2);
+      }
+      const t = anim.progress;
+      const ballPos = getArcPosition(anim, t);
+      anim.currentX = ballPos.x;
+      anim.currentY = ballPos.y;
+      anim.rotation += 0.08;
+
+      ballTrail.push({ x: ballPos.x, y: ballPos.y, life: 1.0 });
+      if (ballTrail.length > 25) ballTrail.shift();
+      for (const tr of ballTrail) tr.life -= 0.04;
+
+    } else if (anim.phase === 'drop') {
+      anim.progress += 0.04;
+      if (anim.progress >= 1) { anim.progress = 1; finalizeAnimation(anim); return; }
+      const t = anim.progress;
+      anim.currentX = anim.endX;
+      anim.currentY = anim.dropStartY + (anim.dropEndY - anim.dropStartY) * (t * t);
+      anim.rotation += 0.06;
+    }
   }
 }
 
@@ -992,6 +1090,14 @@ function gameLoop() {
 
   requestAnimationFrame(gameLoop);
 }
+
+// Keyboard toggle for graphics mode
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'g' || e.key === 'G') {
+    graphicsMode = graphicsMode === 1 ? 2 : 1;
+    console.log(`Graphics mode: ${graphicsMode === 1 ? 'Original Arc' : 'Rim Bounce'}`);
+  }
+});
 
 // Button handlers
 joinBtn.addEventListener('click', () => {

@@ -1,39 +1,39 @@
-# Basketball Connect 4 - Active Context
+# Active Context — Basketball C4
 
-## Current State
-Fully functional 2-player online basketball connect 4 game. Deployed to Railway.
+## Current State (2026-04-14)
 
-## Recent Changes (2026-04-14)
-- **Major gameplay overhaul:** Replaced slingshot aiming + bumper physics with column selection + odds-based system
-  - Players now click a column to select their target (no more drag-to-aim)
-  - Server rolls odds to determine actual landing column
-  - Ball animates with smooth arcs — always goes to top of canvas before falling
-  - Three animation types: direct (clean arc), adjacent (drift at top), wild (wobble + wide drift)
-- Removed: bumpers, physics simulation, slingshot drag, Gaussian perturbation, wall bounces
-- Added: column selector UI, server-side odds calculation, arc animations, auto-join support
+### What Was Just Built
+- **Position-based odds**: Mouse X position within a cell affects probability distribution. Center = 50/15/15/5, edge = 30/30/14/4. Smooth interpolation via `calculateOdds(targetCol, cellOffset)`.
+- **Full-column redistribution**: Can aim at full columns — their probability splits to nearest available neighbors on each side.
+- **Probability bar chart**: Appears above the board on hover, shows real-time odds with color-coding (player color / orange / blue). Updates as mouse moves within a cell.
+- **Graphics Option 2 (Rim Bounce)**: Default animation. Ball arcs up, hits the rim between holes, bounces with 85% speed, settles into correct column, drops in. Three phases: arc → bounce → drop.
+- **Graphics Option 1 (Original Arc)**: Preserved. Direct/adjacent/wild animation styles based on distance from target.
+- Press **G** key to toggle between animation modes.
 
-## Previous (2026-04-13)
-- Built entire game from scratch: server + client
-- Created GitHub repo: https://github.com/jk212h20/BasketballC4
-- Deployed to Railway: https://basketballc4-production.up.railway.app
-- Railway project ID: `0df5b857-bc8b-4b6d-979a-4671061a6745`
-- Railway service ID: `d5125fc9-b3f4-4568-b6e3-9e6120594a7f`
+### Architecture
+| File | Purpose |
+|------|---------|
+| `server/index.js` | Express + Socket.io server, odds calculation, game state |
+| `public/game.js` | Canvas game engine, animations, bar chart, input handling |
+| `public/index.html` | HTML shell with lobby + game screen |
+| `public/style.css` | Styling |
 
-## Architecture
-- `server/index.js` — Express + Socket.io, room-based matchmaking, game state, win detection, **odds calculation**
-- `public/game.js` — Canvas rendering, column selection UI, arc animations, particle effects
-- `public/index.html` — Lobby + game screen
-- `public/style.css` — Arcade neon styling
+### Key Implementation Details
+- Odds calculated on both server (authoritative) and client (display) — must stay in sync
+- `getCenterOdds()` + `getEdgeOdds()` + interpolation via `calculateOdds(col, offset)`
+- `redistributeFullColumns()` spreads full column probability to nearest available neighbors
+- `roundOddsTo100()` ensures integer odds summing to exactly 100 (largest remainder method)
+- Animation system: `ballAnim` object with phases, `graphicsMode` field determines behavior
+- Server sends `cellOffset` with shoot event for position-based odds
 
-## Key Design Decisions
-- **Server-authoritative odds:** Client sends `targetColumn`, server rolls actual landing column and broadcasts result
-- **Odds system:**
-  - Non-edge: 50% target, 15% each adjacent, 5% each remaining → `[5, 15, 50, 15, 5, 5, 5]`
-  - Edge (col 0 or 6): 50% target, 30% adjacent, 4% each remaining → `[50, 30, 4, 4, 4, 4, 4]`
-  - Full columns excluded, odds redistributed proportionally
-- **Animation types:** direct (distance 0), adjacent (distance 1), wild (distance 2+) — each has distinct arc path
-- No database needed — all game state in-memory via Socket.io rooms
+### Deployment
+- **Railway**: Project `0df5b857-bc8b-4b6d-979a-4671061a6745`, Service `d5125fc9-b3f4-4568-b6e3-9e6120594a7f`
+- **URL**: https://basketballc4-production.up.railway.app
+- **GitHub**: https://github.com/jk212h20/BasketballC4.git
 
-## Port
-- Local: 3000 (default)
-- Production: Railway-assigned PORT env var
+### What's NOT Built Yet
+- No single-player / AI mode
+- No lobby system / room codes
+- No sound effects
+- No mobile-optimized layout
+- No persistent scores / accounts

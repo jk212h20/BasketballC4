@@ -518,8 +518,8 @@ function updateBallAnimation() {
       for (const tr of ballTrail) tr.life -= 0.04;
 
     } else if (anim.phase === 'bounce') {
-      // Short bounce arc from rim to above the actual column
-      const speed = 0.03 * anim.bounceSpeed;
+      // Bounce arc from rim — ball pops UP with most of its momentum preserved
+      const speed = 0.025 * anim.bounceSpeed;
       anim.progress += speed;
       if (anim.progress >= 1) {
         anim.progress = 1;
@@ -528,11 +528,10 @@ function updateBallAnimation() {
         spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 6, 1.5);
       }
       const t = anim.progress;
-      // Small arc from rim to above the actual column
-      // Bounce pops up slightly then settles above the hole
-      const bounceHeight = anim.rimY - 30; // pop up 30px above rim
+      // Bounce pops the ball high — 85% of the way back to the peak
+      const bounceApex = anim.rimY - (anim.rimY - anim.peakY) * 0.85;
       anim.currentX = lerp(anim.rimX, anim.endX, easeInOut(t));
-      anim.currentY = parabolicY(anim.rimY, bounceHeight, anim.dropStartY, t);
+      anim.currentY = parabolicY(anim.rimY, bounceApex, anim.dropStartY, t);
       anim.rotation -= 0.12; // reverse spin on bounce
 
       ballTrail.push({ x: anim.currentX, y: anim.currentY, life: 1.0 });

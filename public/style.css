@@ -66,6 +66,36 @@ body {
   transform: scale(0.98);
 }
 
+.mode-select {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.mode-btn {
+  padding: 14px 28px;
+  font-size: 1.1rem;
+  letter-spacing: 2px;
+}
+
+.simultaneous-btn {
+  background: linear-gradient(180deg, #44aaff 0%, #2266cc 100%);
+  border-color: #66bbff;
+  box-shadow: 0 0 20px rgba(68, 170, 255, 0.4), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+
+.simultaneous-btn:hover {
+  box-shadow: 0 0 30px rgba(68, 170, 255, 0.7), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+
+.mode-hint {
+  color: rgba(136, 204, 255, 0.5);
+  font-size: 0.8rem;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+
 .status-text {
   color: #88ccff;
   margin-top: 20px;

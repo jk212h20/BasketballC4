@@ -11,7 +11,11 @@
     <div class="lobby-content">
       <h1 class="game-title">BASKETBALL CONNECT 4</h1>
       <p class="subtitle">Aim. Shoot. Bounce. Win.</p>
-      <button id="join-btn" class="arcade-btn">JOIN GAME</button>
+      <div class="mode-select">
+        <button id="join-turnbased-btn" class="arcade-btn mode-btn">⏱ TURN-BASED</button>
+        <button id="join-simultaneous-btn" class="arcade-btn mode-btn simultaneous-btn">⚡ SIMULTANEOUS</button>
+      </div>
+      <p class="mode-hint">Turn-based: take turns shooting • Simultaneous: both shoot in real-time</p>
       <p id="lobby-status" class="status-text"></p>
     </div>
   </div>
@@ -36,6 +40,8 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/odds.js"></script>
+  <script src="/draw.js"></script>
   <script src="/game.js"></script>
 </body>
 </html>

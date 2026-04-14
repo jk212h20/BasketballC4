@@ -74,6 +74,37 @@ const SHOOT_Y = CANVAS_HEIGHT - 30;
 // Animation peak (top of canvas)
 const PEAK_Y = 35;
 
+// Probability bar chart layout
+const CHART_Y = 60;       // Top of chart area
+const CHART_HEIGHT = 120;  // Max bar height
+const BAR_WIDTH = 50;      // Width of each bar
+const BAR_GAP = (CELL_SIZE - BAR_WIDTH) / 2; // Center bars in columns
+
+// Client-side odds calculation (mirrors server for display)
+function calculateOdds(targetCol) {
+  const odds = new Array(COLS).fill(0);
+  const isEdge = (targetCol === 0 || targetCol === COLS - 1);
+
+  if (isEdge) {
+    odds[targetCol] = 50;
+    if (targetCol === 0) {
+      odds[1] = 30;
+      for (let c = 2; c < COLS; c++) odds[c] = 4;
+    } else {
+      odds[COLS - 2] = 30;
+      for (let c = 0; c < COLS - 2; c++) odds[c] = 4;
+    }
+  } else {
+    odds[targetCol] = 50;
+    odds[targetCol - 1] = 15;
+    odds[targetCol + 1] = 15;
+    for (let c = 0; c < COLS; c++) {
+      if (odds[c] === 0) odds[c] = 5;
+    }
+  }
+  return odds;
+}
+
 // Particle system
 function spawnParticles(x, y, color, count, speed) {
   for (let i = 0; i < count; i++) {
@@ -244,8 +275,8 @@ canvas.addEventListener('mousemove', (e) => {
   const x = (e.clientX - rect.left) * (canvas.width / rect.width);
   const y = (e.clientY - rect.top) * (canvas.height / rect.height);
   
-  // Accept hover over board or selector area
-  if (y >= SELECTOR_Y - 20 && y <= BOARD_Y + BOARD_HEIGHT) {
+  // Accept hover over chart, board or selector area
+  if (y >= CHART_Y - 10 && y <= BOARD_Y + BOARD_HEIGHT) {
     hoveredCol = getColFromX(x);
   } else {
     hoveredCol = -1;
@@ -792,6 +823,85 @@ function darkenColor(hex, amount) {
   return `rgb(${r},${g},${b})`;
 }
 
+function drawProbabilityChart() {
+  // Only show when it's the player's turn and they're hovering a column
+  if (!canShoot || ballAnim || hoveredCol === -1) return;
+
+  const odds = calculateOdds(hoveredCol);
+  const maxOdd = 50; // normalize bars to 50%
+  const playerColor = playerNumber === 1 ? P1_COLOR : P2_COLOR;
+  const chartBottom = CHART_Y + CHART_HEIGHT;
+
+  // Draw each bar
+  for (let c = 0; c < COLS; c++) {
+    const barX = BOARD_X + c * CELL_SIZE + BAR_GAP;
+    const barHeight = (odds[c] / maxOdd) * CHART_HEIGHT;
+    const barY = chartBottom - barHeight;
+
+    // Check if column is full
+    let colFull = true;
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r] && board[r][c] === 0) { colFull = false; break; }
+    }
+
+    // Bar color based on probability tier
+    let barColor, barAlpha;
+    if (c === hoveredCol) {
+      barColor = playerColor;
+      barAlpha = 0.85;
+    } else if (odds[c] >= 15) {
+      barColor = '#ff8c00'; // adjacent — orange
+      barAlpha = 0.7;
+    } else {
+      barColor = '#6677aa'; // wild — muted blue
+      barAlpha = 0.5;
+    }
+
+    if (colFull) barAlpha *= 0.3; // dim full columns
+
+    ctx.globalAlpha = barAlpha;
+
+    // Bar with rounded top
+    const radius = Math.min(4, BAR_WIDTH / 2);
+    ctx.beginPath();
+    ctx.moveTo(barX + radius, barY);
+    ctx.lineTo(barX + BAR_WIDTH - radius, barY);
+    ctx.quadraticCurveTo(barX + BAR_WIDTH, barY, barX + BAR_WIDTH, barY + radius);
+    ctx.lineTo(barX + BAR_WIDTH, chartBottom);
+    ctx.lineTo(barX, chartBottom);
+    ctx.lineTo(barX, barY + radius);
+    ctx.quadraticCurveTo(barX, barY, barX + radius, barY);
+    ctx.closePath();
+    ctx.fillStyle = barColor;
+    ctx.fill();
+
+    // Percentage label above bar
+    ctx.globalAlpha = colFull ? 0.2 : 0.9;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(odds[c] + '%', barX + BAR_WIDTH / 2, barY - 3);
+  }
+
+  ctx.globalAlpha = 1;
+
+  // Baseline
+  ctx.strokeStyle = 'rgba(100, 150, 255, 0.2)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(BOARD_X, chartBottom);
+  ctx.lineTo(BOARD_X + BOARD_WIDTH, chartBottom);
+  ctx.stroke();
+
+  // "PROBABILITY" label
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('PROBABILITY', CANVAS_WIDTH / 2, CHART_Y - 14);
+}
+
 function drawColumnLabels() {
   ctx.font = 'bold 14px monospace';
   ctx.textAlign = 'center';
@@ -805,6 +915,7 @@ function drawColumnLabels() {
 // Main game loop
 function gameLoop() {
   drawBackground();
+  drawProbabilityChart();
   drawColumnSelectors();
   drawBoard();
   drawColumnLabels();

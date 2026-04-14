@@ -75,6 +75,78 @@ function getLowestRow(board, col) {
   return -1;
 }
 
+// Odds calculation
+// For a non-edge target column, the distribution relative to target is:
+//   [...5%, 15%, 50%, 15%, 5%...]
+// with remaining columns getting 5% each.
+// For an edge column (0 or 6):
+//   [50%, 30%, 4%, 4%, 4%, 4%, 4%] from the edge outward.
+function calculateOdds(targetCol) {
+  const odds = new Array(COLS).fill(0);
+  const isEdge = (targetCol === 0 || targetCol === COLS - 1);
+
+  if (isEdge) {
+    // Edge: 50% target, 30% adjacent, 4% each remaining
+    odds[targetCol] = 50;
+    if (targetCol === 0) {
+      odds[1] = 30;
+      for (let c = 2; c < COLS; c++) odds[c] = 4;
+    } else {
+      odds[COLS - 2] = 30;
+      for (let c = 0; c < COLS - 2; c++) odds[c] = 4;
+    }
+  } else {
+    // Non-edge: 50% target, 15% each adjacent, 5% each remaining
+    odds[targetCol] = 50;
+    odds[targetCol - 1] = 15;
+    odds[targetCol + 1] = 15;
+    for (let c = 0; c < COLS; c++) {
+      if (odds[c] === 0) odds[c] = 5;
+    }
+  }
+
+  return odds;
+}
+
+function rollColumn(targetCol, board) {
+  let odds = calculateOdds(targetCol);
+
+  // Zero out full columns and redistribute
+  let attempts = 0;
+  while (attempts < 100) {
+    // Check which columns have space
+    const available = [];
+    for (let c = 0; c < COLS; c++) {
+      if (getLowestRow(board, c) !== -1) available.push(c);
+    }
+    if (available.length === 0) return -1; // Board is full
+
+    // Build odds for available columns only
+    const filteredOdds = new Array(COLS).fill(0);
+    let totalOdds = 0;
+    for (const c of available) {
+      filteredOdds[c] = odds[c];
+      totalOdds += odds[c];
+    }
+
+    // Normalize and roll
+    const roll = Math.random() * totalOdds;
+    let cumulative = 0;
+    for (let c = 0; c < COLS; c++) {
+      cumulative += filteredOdds[c];
+      if (roll < cumulative) return c;
+    }
+
+    attempts++;
+  }
+
+  // Fallback: pick any available column
+  for (let c = 0; c < COLS; c++) {
+    if (getLowestRow(board, c) !== -1) return c;
+  }
+  return -1;
+}
+
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 8);
 }
@@ -135,15 +207,18 @@ io.on('connection', (socket) => {
     
     if (playerNumber !== game.currentPlayer) return;
 
-    // The client sends the final column the ball landed in after physics simulation
-    const { column } = data;
+    const { targetColumn } = data;
     
-    if (column < 0 || column >= COLS) return;
-    
-    const row = getLowestRow(game.board, column);
-    if (row === -1) return; // Column full
+    if (targetColumn < 0 || targetColumn >= COLS) return;
 
-    game.board[row][column] = playerNumber;
+    // Roll the actual column based on odds
+    const actualColumn = rollColumn(targetColumn, game.board);
+    if (actualColumn === -1) return; // Board full somehow
+
+    const row = getLowestRow(game.board, actualColumn);
+    if (row === -1) return; // Shouldn't happen after rollColumn
+
+    game.board[row][actualColumn] = playerNumber;
     game.shotsTaken++;
 
     // Check win
@@ -158,9 +233,10 @@ io.on('connection', (socket) => {
       game.currentPlayer = game.currentPlayer === 1 ? 2 : 1;
     }
 
-    // Broadcast the shot result (all clients animate the same physics)
+    // Broadcast the shot result — both clients animate the same arc
     io.to(game.id).emit('shot-result', {
-      column,
+      targetColumn,
+      actualColumn,
       row,
       player: playerNumber,
       board: game.board,

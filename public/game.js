@@ -54,6 +54,7 @@ let canShoot = false;
 
 // Column selection state
 let hoveredCol = -1;
+let hoveredCellOffset = 0.5; // 0.0=left edge, 0.5=center, 1.0=right edge
 let selectedCol = -1;
 
 // Ball animation state
@@ -81,28 +82,85 @@ const BAR_WIDTH = 50;      // Width of each bar
 const BAR_GAP = (CELL_SIZE - BAR_WIDTH) / 2; // Center bars in columns
 
 // Client-side odds calculation (mirrors server for display)
-function calculateOdds(targetCol) {
+function getCenterOdds(targetCol) {
   const odds = new Array(COLS).fill(0);
   const isEdge = (targetCol === 0 || targetCol === COLS - 1);
-
   if (isEdge) {
     odds[targetCol] = 50;
-    if (targetCol === 0) {
-      odds[1] = 30;
-      for (let c = 2; c < COLS; c++) odds[c] = 4;
-    } else {
-      odds[COLS - 2] = 30;
-      for (let c = 0; c < COLS - 2; c++) odds[c] = 4;
-    }
+    if (targetCol === 0) { odds[1] = 30; for (let c = 2; c < COLS; c++) odds[c] = 4; }
+    else { odds[COLS - 2] = 30; for (let c = 0; c < COLS - 2; c++) odds[c] = 4; }
   } else {
-    odds[targetCol] = 50;
-    odds[targetCol - 1] = 15;
-    odds[targetCol + 1] = 15;
+    odds[targetCol] = 50; odds[targetCol - 1] = 15; odds[targetCol + 1] = 15;
+    for (let c = 0; c < COLS; c++) { if (odds[c] === 0) odds[c] = 5; }
+  }
+  return odds;
+}
+
+function getEdgeOdds(targetCol, side) {
+  const odds = new Array(COLS).fill(0);
+  const neighborCol = side === 'left' ? targetCol - 1 : targetCol + 1;
+  if (neighborCol < 0 || neighborCol >= COLS) return getCenterOdds(targetCol);
+  odds[targetCol] = 30; odds[neighborCol] = 30;
+  const adj1 = side === 'left' ? targetCol + 1 : targetCol - 1;
+  const adj2 = side === 'left' ? neighborCol - 1 : neighborCol + 1;
+  if (adj1 >= 0 && adj1 < COLS) odds[adj1] = 14;
+  if (adj2 >= 0 && adj2 < COLS && odds[adj2] === 0) odds[adj2] = 14;
+  let assigned = 0, unassignedCount = 0;
+  for (let c = 0; c < COLS; c++) { assigned += odds[c]; if (odds[c] === 0) unassignedCount++; }
+  const remaining = 100 - assigned;
+  if (unassignedCount > 0) {
+    const each = Math.floor(remaining / unassignedCount);
+    let leftover = remaining - each * unassignedCount;
     for (let c = 0; c < COLS; c++) {
-      if (odds[c] === 0) odds[c] = 5;
+      if (odds[c] === 0) { odds[c] = each + (leftover > 0 ? 1 : 0); if (leftover > 0) leftover--; }
     }
   }
   return odds;
+}
+
+function roundOddsTo100(raw) {
+  const floored = raw.map(v => Math.floor(v));
+  let sum = floored.reduce((a, b) => a + b, 0);
+  const remainders = raw.map((v, i) => ({ i, r: v - floored[i] }));
+  remainders.sort((a, b) => b.r - a.r);
+  let deficit = 100 - sum;
+  for (let k = 0; k < deficit; k++) floored[remainders[k].i]++;
+  return floored;
+}
+
+function calculateOdds(targetCol, cellOffset) {
+  cellOffset = Math.max(0, Math.min(1, cellOffset || 0.5));
+  const center = getCenterOdds(targetCol);
+  let edgeness, side;
+  if (cellOffset <= 0.5) { edgeness = (0.5 - cellOffset) / 0.5; side = 'left'; }
+  else { edgeness = (cellOffset - 0.5) / 0.5; side = 'right'; }
+  if (edgeness < 0.01) return center;
+  const edge = getEdgeOdds(targetCol, side);
+  const raw = new Array(COLS).fill(0);
+  for (let c = 0; c < COLS; c++) raw[c] = center[c] * (1 - edgeness) + edge[c] * edgeness;
+  return roundOddsTo100(raw);
+}
+
+function redistributeFullColumns(odds) {
+  const available = new Array(COLS).fill(true);
+  for (let c = 0; c < COLS; c++) {
+    let full = true;
+    for (let r = 0; r < ROWS; r++) { if (board[r] && board[r][c] === 0) { full = false; break; } }
+    available[c] = !full;
+  }
+  if (available.every(a => a)) return odds;
+  const result = odds.slice();
+  for (let c = 0; c < COLS; c++) {
+    if (available[c] || result[c] === 0) continue;
+    const prob = result[c]; result[c] = 0;
+    let leftCol = -1, rightCol = -1;
+    for (let l = c - 1; l >= 0; l--) { if (available[l]) { leftCol = l; break; } }
+    for (let r = c + 1; r < COLS; r++) { if (available[r]) { rightCol = r; break; } }
+    if (leftCol >= 0 && rightCol >= 0) { const h = Math.floor(prob/2); result[leftCol] += h; result[rightCol] += prob - h; }
+    else if (leftCol >= 0) result[leftCol] += prob;
+    else if (rightCol >= 0) result[rightCol] += prob;
+  }
+  return result;
 }
 
 // Particle system
@@ -278,6 +336,12 @@ canvas.addEventListener('mousemove', (e) => {
   // Accept hover over chart, board or selector area
   if (y >= CHART_Y - 10 && y <= BOARD_Y + BOARD_HEIGHT) {
     hoveredCol = getColFromX(x);
+    // Track position within the cell (0.0=left edge, 0.5=center, 1.0=right edge)
+    if (hoveredCol >= 0) {
+      const cellLeft = BOARD_X + hoveredCol * CELL_SIZE;
+      hoveredCellOffset = (x - cellLeft) / CELL_SIZE;
+      hoveredCellOffset = Math.max(0, Math.min(1, hoveredCellOffset));
+    }
   } else {
     hoveredCol = -1;
   }
@@ -296,17 +360,14 @@ canvas.addEventListener('click', (e) => {
   const col = getColFromX(x);
   if (col === -1) return;
 
-  // Check if column has space
-  let colFull = true;
-  for (let r = 0; r < ROWS; r++) {
-    if (board[r][col] === 0) { colFull = false; break; }
-  }
-  if (colFull) return;
+  // Calculate cell offset for position-based odds
+  const cellLeft = BOARD_X + col * CELL_SIZE;
+  const offset = Math.max(0, Math.min(1, (x - cellLeft) / CELL_SIZE));
 
-  // Send shot to server — server will roll odds and respond
+  // Allow clicking any column — full columns get redistributed by server
   selectedCol = col;
   canShoot = false;
-  socket.emit('shoot', { targetColumn: col });
+  socket.emit('shoot', { targetColumn: col, cellOffset: offset });
 });
 
 // Touch support
@@ -318,7 +379,11 @@ canvas.addEventListener('touchstart', (e) => {
   const y = (touch.clientY - rect.top) * (canvas.height / rect.height);
   
   const col = getColFromX(x);
-  if (col !== -1) hoveredCol = col;
+  if (col !== -1) {
+    hoveredCol = col;
+    const cellLeft = BOARD_X + col * CELL_SIZE;
+    hoveredCellOffset = Math.max(0, Math.min(1, (x - cellLeft) / CELL_SIZE));
+  }
 });
 
 canvas.addEventListener('touchend', (e) => {
@@ -326,15 +391,10 @@ canvas.addEventListener('touchend', (e) => {
   if (!canShoot || ballAnim || hoveredCol === -1) return;
   
   const col = hoveredCol;
-  let colFull = true;
-  for (let r = 0; r < ROWS; r++) {
-    if (board[r][col] === 0) { colFull = false; break; }
-  }
-  if (colFull) { hoveredCol = -1; return; }
-
+  // Allow clicking any column — full columns get redistributed by server
   selectedCol = col;
   canShoot = false;
-  socket.emit('shoot', { targetColumn: col });
+  socket.emit('shoot', { targetColumn: col, cellOffset: hoveredCellOffset });
   hoveredCol = -1;
 });
 
@@ -524,13 +584,14 @@ function drawColumnSelectors() {
     }
 
     if (colFull) {
-      // Draw X mark for full columns
+      // Draw X mark for full columns but still allow hovering for probability display
       ctx.fillStyle = 'rgba(255, 50, 50, 0.3)';
       ctx.font = 'bold 20px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('✕', cx, cy);
-      continue;
+      // Don't skip — still draw hover effects (dimmed) so user can see redistribution
+      if (!((hoveredCol === c) && canShoot && !ballAnim)) continue;
     }
 
     const isHovered = (hoveredCol === c) && canShoot && !ballAnim;
@@ -827,8 +888,10 @@ function drawProbabilityChart() {
   // Only show when it's the player's turn and they're hovering a column
   if (!canShoot || ballAnim || hoveredCol === -1) return;
 
-  const odds = calculateOdds(hoveredCol);
-  const maxOdd = 50; // normalize bars to 50%
+  // Calculate position-based odds, then apply full-column redistribution
+  let odds = calculateOdds(hoveredCol, hoveredCellOffset);
+  odds = redistributeFullColumns(odds);
+  const maxOdd = Math.max(...odds, 50); // normalize bars to highest value (at least 50)
   const playerColor = playerNumber === 1 ? P1_COLOR : P2_COLOR;
   const chartBottom = CHART_Y + CHART_HEIGHT;
 

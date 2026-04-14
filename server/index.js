@@ -75,18 +75,16 @@ function getLowestRow(board, col) {
   return -1;
 }
 
-// Odds calculation
-// For a non-edge target column, the distribution relative to target is:
-//   [...5%, 15%, 50%, 15%, 5%...]
-// with remaining columns getting 5% each.
-// For an edge column (0 or 6):
-//   [50%, 30%, 4%, 4%, 4%, 4%, 4%] from the edge outward.
-function calculateOdds(targetCol) {
+// Odds calculation with position-based interpolation
+// centerOdds: odds when clicking dead center of a cell
+// edgeOdds: odds when clicking the boundary between two cells
+// cellOffset (0.0 = left edge of cell, 0.5 = center, 1.0 = right edge)
+// The offset interpolates between center odds and edge odds.
+
+function getCenterOdds(targetCol) {
   const odds = new Array(COLS).fill(0);
   const isEdge = (targetCol === 0 || targetCol === COLS - 1);
-
   if (isEdge) {
-    // Edge: 50% target, 30% adjacent, 4% each remaining
     odds[targetCol] = 50;
     if (targetCol === 0) {
       odds[1] = 30;
@@ -96,7 +94,6 @@ function calculateOdds(targetCol) {
       for (let c = 0; c < COLS - 2; c++) odds[c] = 4;
     }
   } else {
-    // Non-edge: 50% target, 15% each adjacent, 5% each remaining
     odds[targetCol] = 50;
     odds[targetCol - 1] = 15;
     odds[targetCol + 1] = 15;
@@ -104,43 +101,159 @@ function calculateOdds(targetCol) {
       if (odds[c] === 0) odds[c] = 5;
     }
   }
-
   return odds;
 }
 
-function rollColumn(targetCol, board) {
-  let odds = calculateOdds(targetCol);
+function getEdgeOdds(targetCol, side) {
+  // side: 'left' (toward col-1) or 'right' (toward col+1)
+  // At the edge, the two columns share prominence: 30/30 with 14 for next-adjacent
+  const odds = new Array(COLS).fill(0);
+  const neighborCol = side === 'left' ? targetCol - 1 : targetCol + 1;
 
-  // Zero out full columns and redistribute
-  let attempts = 0;
-  while (attempts < 100) {
-    // Check which columns have space
-    const available = [];
-    for (let c = 0; c < COLS; c++) {
-      if (getLowestRow(board, c) !== -1) available.push(c);
-    }
-    if (available.length === 0) return -1; // Board is full
-
-    // Build odds for available columns only
-    const filteredOdds = new Array(COLS).fill(0);
-    let totalOdds = 0;
-    for (const c of available) {
-      filteredOdds[c] = odds[c];
-      totalOdds += odds[c];
-    }
-
-    // Normalize and roll
-    const roll = Math.random() * totalOdds;
-    let cumulative = 0;
-    for (let c = 0; c < COLS; c++) {
-      cumulative += filteredOdds[c];
-      if (roll < cumulative) return c;
-    }
-
-    attempts++;
+  if (neighborCol < 0 || neighborCol >= COLS) {
+    // At the board edge — no neighbor, use center odds
+    return getCenterOdds(targetCol);
   }
 
-  // Fallback: pick any available column
+  // Both the target and neighbor get 30%
+  odds[targetCol] = 30;
+  odds[neighborCol] = 30;
+
+  // Next-adjacent columns get 14%
+  const adj1 = side === 'left' ? targetCol + 1 : targetCol - 1;
+  const adj2 = side === 'left' ? neighborCol - 1 : neighborCol + 1;
+  if (adj1 >= 0 && adj1 < COLS) odds[adj1] = 14;
+  if (adj2 >= 0 && adj2 < COLS && odds[adj2] === 0) odds[adj2] = 14;
+
+  // Remaining columns split the rest to total 100
+  let assigned = 0;
+  let unassignedCount = 0;
+  for (let c = 0; c < COLS; c++) {
+    assigned += odds[c];
+    if (odds[c] === 0) unassignedCount++;
+  }
+  const remaining = 100 - assigned;
+  if (unassignedCount > 0) {
+    const each = Math.floor(remaining / unassignedCount);
+    let leftover = remaining - each * unassignedCount;
+    for (let c = 0; c < COLS; c++) {
+      if (odds[c] === 0) {
+        odds[c] = each + (leftover > 0 ? 1 : 0);
+        if (leftover > 0) leftover--;
+      }
+    }
+  }
+  return odds;
+}
+
+function calculateOdds(targetCol, cellOffset) {
+  // cellOffset: 0.0 = left edge, 0.5 = center, 1.0 = right edge
+  // Clamp to [0, 1]
+  cellOffset = Math.max(0, Math.min(1, cellOffset));
+
+  const center = getCenterOdds(targetCol);
+
+  // How far from center? 0 at center, 1 at edge
+  let edgeness, side;
+  if (cellOffset <= 0.5) {
+    edgeness = (0.5 - cellOffset) / 0.5; // 0 at center, 1 at left edge
+    side = 'left';
+  } else {
+    edgeness = (cellOffset - 0.5) / 0.5; // 0 at center, 1 at right edge
+    side = 'right';
+  }
+
+  if (edgeness < 0.01) return center; // Dead center, no interpolation needed
+
+  const edge = getEdgeOdds(targetCol, side);
+
+  // Interpolate
+  const raw = new Array(COLS).fill(0);
+  for (let c = 0; c < COLS; c++) {
+    raw[c] = center[c] * (1 - edgeness) + edge[c] * edgeness;
+  }
+
+  // Round to integers that sum to 100
+  return roundOddsTo100(raw);
+}
+
+function roundOddsTo100(raw) {
+  const floored = raw.map(v => Math.floor(v));
+  let sum = floored.reduce((a, b) => a + b, 0);
+  const remainders = raw.map((v, i) => ({ i, r: v - floored[i] }));
+  remainders.sort((a, b) => b.r - a.r);
+  let deficit = 100 - sum;
+  for (let k = 0; k < deficit; k++) {
+    floored[remainders[k].i]++;
+  }
+  return floored;
+}
+
+// Full-column redistribution: spread full column's odds to nearest available neighbors
+function redistributeFullColumns(odds, board) {
+  const available = new Array(COLS).fill(false);
+  for (let c = 0; c < COLS; c++) {
+    available[c] = getLowestRow(board, c) !== -1;
+  }
+
+  // If all available, no redistribution needed
+  if (available.every(a => a)) return odds;
+
+  // If none available, board is full
+  if (!available.some(a => a)) return null;
+
+  const result = odds.slice();
+
+  // For each full column, distribute its probability to nearest available columns on each side
+  for (let c = 0; c < COLS; c++) {
+    if (available[c] || result[c] === 0) continue;
+
+    const prob = result[c];
+    result[c] = 0;
+
+    // Find nearest available column on the left
+    let leftCol = -1;
+    for (let l = c - 1; l >= 0; l--) {
+      if (available[l]) { leftCol = l; break; }
+    }
+
+    // Find nearest available column on the right
+    let rightCol = -1;
+    for (let r = c + 1; r < COLS; r++) {
+      if (available[r]) { rightCol = r; break; }
+    }
+
+    if (leftCol >= 0 && rightCol >= 0) {
+      // Split evenly between nearest available on each side
+      const half = Math.floor(prob / 2);
+      result[leftCol] += half;
+      result[rightCol] += prob - half;
+    } else if (leftCol >= 0) {
+      result[leftCol] += prob;
+    } else if (rightCol >= 0) {
+      result[rightCol] += prob;
+    }
+  }
+
+  return result;
+}
+
+function rollColumn(targetCol, cellOffset, board) {
+  let odds = calculateOdds(targetCol, cellOffset);
+
+  // Redistribute full columns to neighbors
+  odds = redistributeFullColumns(odds, board);
+  if (!odds) return -1; // Board completely full
+
+  // Roll
+  const roll = Math.random() * 100;
+  let cumulative = 0;
+  for (let c = 0; c < COLS; c++) {
+    cumulative += odds[c];
+    if (roll < cumulative) return c;
+  }
+
+  // Fallback
   for (let c = 0; c < COLS; c++) {
     if (getLowestRow(board, c) !== -1) return c;
   }
@@ -207,12 +320,13 @@ io.on('connection', (socket) => {
     
     if (playerNumber !== game.currentPlayer) return;
 
-    const { targetColumn } = data;
+    const { targetColumn, cellOffset } = data;
     
     if (targetColumn < 0 || targetColumn >= COLS) return;
 
-    // Roll the actual column based on odds
-    const actualColumn = rollColumn(targetColumn, game.board);
+    // Roll the actual column based on odds + position within cell
+    const offset = typeof cellOffset === 'number' ? Math.max(0, Math.min(1, cellOffset)) : 0.5;
+    const actualColumn = rollColumn(targetColumn, offset, game.board);
     if (actualColumn === -1) return; // Board full somehow
 
     const row = getLowestRow(game.board, actualColumn);

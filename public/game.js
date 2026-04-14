@@ -96,6 +96,12 @@ const COOLDOWN_MS = 1000;
 let opponentAim = null;
 let lastAimEmit = 0;
 
+// Phase durations in ms — time-based animation ensures completion regardless of frame rate
+const PHASE_MS = {
+  gfx2: { arc: 800, bounce: 500, drop: 350 },
+  gfx1: { arcDirect: 700, arcAdjacent: 850, arcWild: 1000, drop: 350 }
+};
+
 // Particle system
 function spawnParticles(x, y, color, count, speed) {
   for (let i = 0; i < count; i++) {
@@ -170,13 +176,7 @@ socket.on('game-state', (data) => {
   } else {
     canShoot = gameStatus === 'playing' && Date.now() >= cooldownEnd;
   }
-  // Only clear animations if no active ones — game-state during animation would kill in-flight balls
-  if (ballAnims.length === 0) {
-    // safe to clear
-  } else {
-    // Let animations finish — they carry the correct pending board state
-    console.log(`game-state received while ${ballAnims.length} animations in flight, keeping them`);
-  }
+  // Don't clear in-flight animations — they carry correct pending board state
   updateTurnDisplay();
 });
 
@@ -203,7 +203,6 @@ socket.on('shot-result', (data) => {
   const startY = SHOOT_Y;
   const endX = BOARD_X + actualColumn * CELL_SIZE + CELL_SIZE / 2;
   const targetX = BOARD_X + targetColumn * CELL_SIZE + CELL_SIZE / 2;
-  const peakY = PEAK_Y;
 
   let peakX;
   if (animType === 'direct') peakX = endX;
@@ -213,8 +212,8 @@ socket.on('shot-result', (data) => {
   // In turn-based, block shooting during animation
   if (gameMode === 'turnBased') canShoot = false;
 
+  const now = Date.now();
   let anim;
-  const createdAt = Date.now();
   if (graphicsMode === 2) {
     const actualCenterX = BOARD_X + actualColumn * CELL_SIZE + CELL_SIZE / 2;
     const rimSide = (startX < actualCenterX) ? -1 : 1;
@@ -225,7 +224,8 @@ socket.on('shot-result', (data) => {
     const approachX = rimX + rimSide * 5;
 
     anim = {
-      phase: 'arc', graphicsMode: 2, animType, progress: 0, createdAt,
+      phase: 'arc', graphicsMode: 2, animType,
+      phaseStart: now,
       startX, startY, peakX: (startX + approachX) / 2, peakY: PEAK_Y,
       rimX, rimY, approachX, endX: actualCenterX,
       bounceEndY: BOARD_Y - BALL_RADIUS * 1.5,
@@ -237,8 +237,9 @@ socket.on('shot-result', (data) => {
     };
   } else {
     anim = {
-      phase: 'arc', graphicsMode: 1, animType, progress: 0, createdAt,
-      startX, startY, peakX, peakY, endX,
+      phase: 'arc', graphicsMode: 1, animType,
+      phaseStart: now,
+      startX, startY, peakX, peakY: PEAK_Y, endX,
       dropStartY: BOARD_Y - BALL_RADIUS,
       dropEndY: BOARD_Y + row * CELL_SIZE + CELL_SIZE / 2,
       targetColumn, actualColumn, row, player,
@@ -309,7 +310,6 @@ canvas.addEventListener('mousemove', (e) => {
   } else {
     hoveredCol = -1;
   }
-  // Emit aim to opponent in simultaneous mode
   if (gameMode === 'simultaneous' && hoveredCol >= 0) {
     const now = Date.now();
     if (now - lastAimEmit > 100) {
@@ -359,7 +359,7 @@ canvas.addEventListener('touchend', (e) => {
   hoveredCol = -1;
 });
 
-// Finalize animation
+// Finalize animation — apply board state and clean up
 function finalizeAnimation(anim) {
   board = anim.pendingBoard;
   currentPlayer = anim.pendingCurrentPlayer;
@@ -383,7 +383,6 @@ function finalizeAnimation(anim) {
     if (gameMode === 'turnBased') canShoot = isMyTurn && ballAnims.length === 0;
   }
   updateTurnDisplay();
-  // Remove this anim from array
   const idx = ballAnims.indexOf(anim);
   if (idx !== -1) ballAnims.splice(idx, 1);
 }
@@ -406,32 +405,37 @@ function getArcPosition(anim, t) {
   }
 }
 
-// Update all ball animations
+// Helper: advance to next phase with timestamp
+function nextPhase(anim, phaseName, now) {
+  anim.phase = phaseName;
+  anim.phaseStart = now;
+}
+
+// Update all ball animations — time-based so they always complete
 function updateBallAnimations() {
   const now = Date.now();
   for (let i = ballAnims.length - 1; i >= 0; i--) {
     const anim = ballAnims[i];
-    // Safety: force-finalize animations stuck for more than 10 seconds
-    if (anim.createdAt && (now - anim.createdAt > 10000)) {
-      console.warn('Animation timed out, force-finalizing');
-      finalizeAnimation(anim);
-      continue;
-    }
+    const elapsed = now - anim.phaseStart;
+
     if (anim.graphicsMode === 2) {
+      // --- Graphics Mode 2: arc → rim bounce → drop ---
       if (anim.phase === 'arc') {
-        anim.progress += 0.016;
-        if (anim.progress >= 1) { anim.progress = 1; anim.phase = 'bounce'; anim.progress = 0; spawnParticles(anim.rimX, anim.rimY, '#ffcc00', 12, 3); }
-        const t = anim.progress;
+        const duration = PHASE_MS.gfx2.arc;
+        const t = Math.min(1, elapsed / duration);
         anim.currentX = lerp(anim.startX, anim.rimX, t);
         anim.currentY = parabolicY(anim.startY, anim.peakY, anim.rimY, t);
         anim.rotation += 0.1;
         anim.trail.push({ x: anim.currentX, y: anim.currentY, life: 1.0 });
         if (anim.trail.length > 25) anim.trail.shift();
         for (const tr of anim.trail) tr.life -= 0.04;
+        if (t >= 1) {
+          spawnParticles(anim.rimX, anim.rimY, '#ffcc00', 12, 3);
+          nextPhase(anim, 'bounce', now);
+        }
       } else if (anim.phase === 'bounce') {
-        anim.progress += 0.025 * anim.bounceSpeed;
-        if (anim.progress >= 1) { anim.progress = 1; anim.phase = 'drop'; anim.progress = 0; spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 6, 1.5); }
-        const t = anim.progress;
+        const duration = PHASE_MS.gfx2.bounce;
+        const t = Math.min(1, elapsed / duration);
         const bounceApex = anim.rimY - (anim.rimY - anim.peakY) * 0.85;
         anim.currentX = lerp(anim.rimX, anim.endX, easeInOut(t));
         anim.currentY = parabolicY(anim.rimY, bounceApex, anim.dropStartY, t);
@@ -439,36 +443,44 @@ function updateBallAnimations() {
         anim.trail.push({ x: anim.currentX, y: anim.currentY, life: 1.0 });
         if (anim.trail.length > 25) anim.trail.shift();
         for (const tr of anim.trail) tr.life -= 0.06;
+        if (t >= 1) {
+          spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 6, 1.5);
+          nextPhase(anim, 'drop', now);
+        }
       } else if (anim.phase === 'drop') {
-        anim.progress += 0.04;
-        if (anim.progress >= 1) { anim.progress = 1; finalizeAnimation(anim); continue; }
-        const t = anim.progress;
+        const duration = PHASE_MS.gfx2.drop;
+        const t = Math.min(1, elapsed / duration);
         anim.currentX = anim.endX;
         anim.currentY = anim.dropStartY + (anim.dropEndY - anim.dropStartY) * (t * t);
         anim.rotation += 0.06;
+        if (t >= 1) { finalizeAnimation(anim); continue; }
       }
+
     } else {
+      // --- Graphics Mode 1: arc → drop ---
       if (anim.phase === 'arc') {
-        let speed;
-        if (anim.animType === 'direct') speed = 0.018;
-        else if (anim.animType === 'adjacent') speed = 0.015;
-        else speed = 0.012;
-        anim.progress += speed;
-        if (anim.progress >= 1) { anim.progress = 1; anim.phase = 'drop'; anim.progress = 0; spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 8, 2); }
-        const t = anim.progress;
+        let duration;
+        if (anim.animType === 'direct') duration = PHASE_MS.gfx1.arcDirect;
+        else if (anim.animType === 'adjacent') duration = PHASE_MS.gfx1.arcAdjacent;
+        else duration = PHASE_MS.gfx1.arcWild;
+        const t = Math.min(1, elapsed / duration);
         const ballPos = getArcPosition(anim, t);
         anim.currentX = ballPos.x; anim.currentY = ballPos.y;
         anim.rotation += 0.08;
         anim.trail.push({ x: ballPos.x, y: ballPos.y, life: 1.0 });
         if (anim.trail.length > 25) anim.trail.shift();
         for (const tr of anim.trail) tr.life -= 0.04;
+        if (t >= 1) {
+          spawnParticles(anim.endX, BOARD_Y - 10, '#ffcc00', 8, 2);
+          nextPhase(anim, 'drop', now);
+        }
       } else if (anim.phase === 'drop') {
-        anim.progress += 0.04;
-        if (anim.progress >= 1) { anim.progress = 1; finalizeAnimation(anim); continue; }
-        const t = anim.progress;
+        const duration = PHASE_MS.gfx1.drop;
+        const t = Math.min(1, elapsed / duration);
         anim.currentX = anim.endX;
         anim.currentY = anim.dropStartY + (anim.dropEndY - anim.dropStartY) * (t * t);
         anim.rotation += 0.06;
+        if (t >= 1) { finalizeAnimation(anim); continue; }
       }
     }
   }
